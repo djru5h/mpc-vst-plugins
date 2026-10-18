@@ -28,6 +28,11 @@
                             * (every 100 ms, see housekeeping) read its "display_rev" and, when it changed, report every
                             * value that moved and ask for an UpdateDisplay (status text, when= panels, meters) */
 #endif
+#ifndef SET_NO_UPDATE
+#define SET_NO_UPDATE 0 /* 1: a host set of a plain value (no options, not a text readout) asks for no UpdateDisplay. MPC rebuilds
+                         * its screen on each one (see DISPLAY_REV_NO_UPDATE), and a Q-Link turn sets the value per click, so on
+                         * MPC One a continuous knob's Q-Link felt sluggish and skipped (mpc-channel-strip, 2026-10-17) */
+#endif
 #ifndef DISPLAY_REV_NO_UPDATE
 #define DISPLAY_REV_NO_UPDATE 0 /* 1 (with HAS_DISPLAY_REV): a changed display_rev only reports the values that moved
                                  * (audioMasterAutomate), with no UpdateDisplay. MPC answers every UpdateDisplay by re-listing the
@@ -347,7 +352,8 @@ static void set_param_now(AEffect *e, int32_t i, float n) {
     eng_set(w, PARAMS[i].key, buf);
     if (PARAMS[i].momentary && n > 0.5f) w->holdFrames[i] = PARAMS[i].hold_ms > 0 ? (int)(PARAMS[i].hold_ms * 44.1f) : 1;
     if (!nudge) popup_picked(w->open, w->holdFrames, i);   /* a list pick closes it; a Q-Link nudge doesn't */
-    w->need_update_display = 1;   /* deferred to processReplacing(), see the step_target branch above */
+    if (!SET_NO_UPDATE || p->nopts || p->string_display || popup_is(i))
+        w->need_update_display = 1;   /* deferred to processReplacing(), see the step_target branch above */
 }
 
 /* MPC's plugin host (JUCE) sets parameter 0 to the far end of its range and straight back whenever it gets ready to play:
