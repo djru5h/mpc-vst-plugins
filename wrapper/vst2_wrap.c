@@ -52,7 +52,8 @@
 #if SAMPLE_ACCURATE && defined(PLUG_EFFECT)
 #error "SAMPLE_ACCURATE is for instruments: an effect has no notes to place"
 #endif
-#ifdef WRAP_TRACE   /* poc/inputprobe: the port provides wrap_trace() and logs every raw host call (kind 0 = setParameter, 1 = getParameter) */
+#ifdef WRAP_TRACE   /* poc/inputprobe: the port provides wrap_trace() and logs every raw host call (kind 0 = setParameter, 1 = getParameter,
+                     * 2 = an automate the wrapper sends, 3 = dispatcher opcode, 4 = UpdateDisplay sent, 5 = a host audio block) */
 void wrap_trace(int kind, int idx, float value);
 #define TRACE(kind, idx, value) wrap_trace(kind, idx, value)
 #else
@@ -544,7 +545,7 @@ static void housekeeping(AEffect *e, int32_t n) {
             for (int i = 0; i < NPARAMS; i++) {
                 if (PARAMS[i].momentary || popup_is(i) || PARAMS[i].string_display) continue;
                 float v = get_norm(w, i);
-                if (fabsf(v - w->last_norm[i]) > 1e-4f) { w->last_norm[i] = v; w->master(&w->fx, audioMasterAutomate, i, 0, 0, v); }
+                if (fabsf(v - w->last_norm[i]) > 1e-4f) { w->last_norm[i] = v; TRACE(2, i, v); w->master(&w->fx, audioMasterAutomate, i, 0, 0, v); }
             }
         }
     }
@@ -569,6 +570,7 @@ static void housekeeping(AEffect *e, int32_t n) {
     }
     if (w->need_update_display) {
         w->need_update_display = 0;
+        TRACE(4, 0, 0);
         w->master(&w->fx, audioMasterUpdateDisplay, 0, 0, 0, 0.0f);
     }
 }
@@ -578,6 +580,7 @@ static void housekeeping(AEffect *e, int32_t n) {
  * any other block size is collected and processed one block late. */
 static void run_block(AEffect *e, float **in, float **out, int32_t n, int accumulate) {
     wrap_t *w = e->object;
+    TRACE(5, 0, (float)n);
     flush_pend0(e);   /* parameter 0, set since the last block (setParameter) */
     housekeeping(e, n);
     /* A conforming host passes real input to an effect, but a plugin scanner (and the device's own load
@@ -717,6 +720,7 @@ static void program_name(wrap_t *w, int idx, char *out) {
 }
 
 static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void *p, float o) {
+    TRACE(3, op, (float)idx);
     wrap_t *w = e->object;
     (void)o;
     switch (op) {
