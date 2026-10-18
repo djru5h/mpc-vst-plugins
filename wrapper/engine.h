@@ -41,3 +41,9 @@ const mpc_engine_t *mpc_engine(void);
  * (a C++ engine defines it extern "C", as it does mpc_engine()). Unlike HAS_DISPLAY_REV, nothing is polled: only the
  * keys the engine names are read back. `poc/selfset` is the test engine. */
 int mpc_engine_changed(void *inst, char *key, int len) __attribute__((weak));
+
+/* Optional, effects only: the host's float audio, interleaved stereo, one 128-frame block, instead of process()'s int16.
+ * process() clips at 0 dBFS on the way in and out; an effect that boosts (an EQ, a make-up gain) or is fed a hot mix
+ * defines this instead, and the wrapper then never calls process() (keep it in mpc_engine_t, for older wrappers). A weak
+ * symbol like mpc_engine_changed (a C++ engine defines it extern "C"). in_lr never aliases out_lr. */
+void mpc_engine_process_f(void *inst, const float *in_lr, float *out_lr, int frames) __attribute__((weak));

@@ -132,6 +132,9 @@ typedef struct {
     int pos;                 /* read position in block; DSP_BLOCK = empty */
     int16_t inb[DSP_BLOCK * 2];   /* effect: the host audio being collected for the engine */
     int inpos;
+#ifdef PLUG_EFFECT
+    float fin[DSP_BLOCK * 2], fout[DSP_BLOCK * 2];   /* effect: the host's float audio in and out of one engine block */
+#endif
     double bpm;
     volatile int holdFrames[NPARAMS];  /* momentary params: frames left before reporting back to 0 (hold_ms) */
     volatile char changed[NPARAMS];  /* params the plugin changed itself (step_of on an option), to report */
@@ -181,8 +184,18 @@ static void eng_render(wrap_t *w, int16_t *out, int n) {
     pthread_mutex_lock(&w->lock); g_api->render(w->dsp, out, n); pthread_mutex_unlock(&w->lock);
 }
 #ifdef PLUG_EFFECT
-static void eng_process(wrap_t *w, const int16_t *in, int16_t *out, int n) {
-    pthread_mutex_lock(&w->lock); g_api->process(w->dsp, in, out, n); pthread_mutex_unlock(&w->lock);
+static int16_t f2s(float f) { f *= 32768.0f; return f >= 32767.0f ? 32767 : f <= -32768.0f ? -32768 : (int16_t)lrintf(f); }
+/* One engine block, w->fin -> w->fout: straight through an engine's float process (engine.h mpc_engine_process_f),
+ * else through int16, which clips the input and output at 0 dBFS */
+static void eng_process(wrap_t *w) {
+    pthread_mutex_lock(&w->lock);
+    if (mpc_engine_process_f) mpc_engine_process_f(w->dsp, w->fin, w->fout, DSP_BLOCK);
+    else {
+        for (int j = 0; j < 2 * DSP_BLOCK; j++) w->inb[j] = f2s(w->fin[j]);
+        g_api->process(w->dsp, w->inb, w->block, DSP_BLOCK);
+        for (int j = 0; j < 2 * DSP_BLOCK; j++) w->fout[j] = w->block[j] * (1.0f / 32768.0f);
+    }
+    pthread_mutex_unlock(&w->lock);
 }
 #endif
 
@@ -561,8 +574,6 @@ static void housekeeping(AEffect *e, int32_t n) {
 }
 
 #ifdef PLUG_EFFECT
-static int16_t f2s(float f) { f *= 32768.0f; return f >= 32767.0f ? 32767 : f <= -32768.0f ? -32768 : (int16_t)lrintf(f); }
-
 /* An effect: whole 128-frame host blocks go straight through the engine (MPC's period is 128, so no added latency);
  * any other block size is collected and processed one block late. */
 static void run_block(AEffect *e, float **in, float **out, int32_t n, int accumulate) {
@@ -576,20 +587,20 @@ static void run_block(AEffect *e, float **in, float **out, int32_t n, int accumu
     while (i < n) {
         int aligned = w->inpos == 0 && w->pos >= DSP_BLOCK && n - i >= DSP_BLOCK;
         if (aligned) {
-            for (int j = 0; j < DSP_BLOCK; j++) { w->inb[2 * j] = have_in ? f2s(in[0][i + j]) : 0; w->inb[2 * j + 1] = have_in ? f2s(in[1][i + j]) : 0; }
-            eng_process(w, w->inb, w->block, DSP_BLOCK);
+            for (int j = 0; j < DSP_BLOCK; j++) { w->fin[2 * j] = have_in ? in[0][i + j] : 0; w->fin[2 * j + 1] = have_in ? in[1][i + j] : 0; }
+            eng_process(w);
             for (int j = 0; j < DSP_BLOCK; j++) {
-                float l = w->block[2 * j] * (1.0f / 32768.0f), r = w->block[2 * j + 1] * (1.0f / 32768.0f);
+                float l = w->fout[2 * j], r = w->fout[2 * j + 1];
                 if (accumulate) { out[0][i + j] += l; out[1][i + j] += r; } else { out[0][i + j] = l; out[1][i + j] = r; }
             }
             i += DSP_BLOCK;
             continue;
         }
         float l = 0, r = 0;
-        if (w->pos < DSP_BLOCK) { l = w->block[w->pos * 2] * (1.0f / 32768.0f); r = w->block[w->pos * 2 + 1] * (1.0f / 32768.0f); w->pos++; }
+        if (w->pos < DSP_BLOCK) { l = w->fout[w->pos * 2]; r = w->fout[w->pos * 2 + 1]; w->pos++; }
         if (accumulate) { out[0][i] += l; out[1][i] += r; } else { out[0][i] = l; out[1][i] = r; }
-        w->inb[2 * w->inpos] = have_in ? f2s(in[0][i]) : 0; w->inb[2 * w->inpos + 1] = have_in ? f2s(in[1][i]) : 0;
-        if (++w->inpos == DSP_BLOCK) { eng_process(w, w->inb, w->block, DSP_BLOCK); w->pos = 0; w->inpos = 0; }
+        w->fin[2 * w->inpos] = have_in ? in[0][i] : 0; w->fin[2 * w->inpos + 1] = have_in ? in[1][i] : 0;
+        if (++w->inpos == DSP_BLOCK) { eng_process(w); w->pos = 0; w->inpos = 0; }
         i++;
     }
 }
