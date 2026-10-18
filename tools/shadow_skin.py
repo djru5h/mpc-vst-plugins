@@ -46,7 +46,9 @@ Layout file:
                                                         tint=1 colors each row from tint_<n> (0..5), a gel washed over black)
     art     file="drawing.svg" [x= y= w= h=] [fit=]    (an SVG drawing, e.g. from studio.py from-svg, or a .png/.jpg/.webp
                                                         image, drawn into the page background: the whole plugin area, or
-                                                        the box; fit=contain|cover|stretch; browser renderer only)
+                                                        the box; fit=contain|cover|stretch; browser renderer only.
+                                                        With when=, its mode image is the box plus bleed= px each
+                                                        side (default 2); bleed=0 tiles neighbouring boxes exactly)
     picture x= y= w= h= key=<param> files="a.png,b.png,.." [fit=]
                                                        (one image per option of the parameter, the current one shown:
                                                         a when= art line per option, so mode images do the switching)
@@ -614,8 +616,9 @@ def text_box(w):
 def baked_rect(w):
     """Area (shadow coords) that baked_cmds(w) draws into, generously; None if it draws nothing."""
     k = w["kind"]
-    if k == "art":
-        return (w["x"] - 2, w["y"] - 2, w["w"] + 4, w["h"] + 4) if "w" in w else (0, Y_OFF, W, H)
+    if k == "art":   # bleed=0: exactly the box, so mode images of neighbouring boxes tile without a seam
+        b = int(w.get("bleed", 2))
+        return (w["x"] - b, w["y"] - b, w["w"] + 2 * b, w["h"] + 2 * b) if "w" in w else (0, Y_OFF, W, H)
     if k == "frame":
         return (w["x"] - 2, w["y"] - 2, w["w"] + 4, w["h"] + 4)
     if k in ("readout", "stepper", "menu", "popup"):
