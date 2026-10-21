@@ -33,6 +33,11 @@
                          * its screen on each one (see DISPLAY_REV_NO_UPDATE), and a Q-Link turn sets the value per click, so on
                          * MPC One a continuous knob's Q-Link felt sluggish and skipped (mpc-channel-strip, 2026-10-17) */
 #endif
+#ifndef AUTOMATABLE_PARAMS
+#define AUTOMATABLE_PARAMS NPARAMS /* params 0..N-1 answer effCanBeAutomated with 1, the rest 0: display-only params (meters,
+                                    * picture columns the engine sets) placed after the controls. MPC answered every
+                                    * automate of an automatable one with a getParamName (mpc-channel-strip, 2026-10-20) */
+#endif
 #ifndef REPORTS_PER_BLOCK
 #define REPORTS_PER_BLOCK 0 /* > 0 (with HAS_DISPLAY_REV): a changed display_rev's reports (audioMasterAutomate, one per moved
                              * value) go out at most this many per audio block, continuing in the next blocks, instead of
@@ -795,7 +800,7 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
     case effGetVendorString: copy_str(p, PLUG_VENDOR, 32); return 1;
     case effGetVendorVersion: return PLUG_VERSION;
     case effGetVstVersion: return 2400;
-    case effCanBeAutomated: return idx >= 0 && idx < NPARAMS;
+    case effCanBeAutomated: return idx >= 0 && idx < NPARAMS && idx < AUTOMATABLE_PARAMS;
     case effGetParamName:
         if (idx >= 0 && idx < NPARAMS) {
             char buf[64], k2[96];
