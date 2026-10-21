@@ -33,6 +33,13 @@
                          * its screen on each one (see DISPLAY_REV_NO_UPDATE), and a Q-Link turn sets the value per click, so on
                          * MPC One a continuous knob's Q-Link felt sluggish and skipped (mpc-channel-strip, 2026-10-17) */
 #endif
+#ifndef REPORTS_PER_BLOCK
+#define REPORTS_PER_BLOCK 0 /* > 0 (with HAS_DISPLAY_REV): a changed display_rev's reports (audioMasterAutomate, one per moved
+                             * value) go out at most this many per audio block, continuing in the next blocks, instead of
+                             * all in the block that saw the change. Each is a synchronous call into MPC from the audio
+                             * thread: a graph of a few hundred picture params (mpc-channel-strip, 2026-10-20) sent them in
+                             * one block ten times a second and the MPC One's audio crackled. 0: all at once (as before) */
+#endif
 #ifndef DISPLAY_REV_NO_UPDATE
 #define DISPLAY_REV_NO_UPDATE 0 /* 1 (with HAS_DISPLAY_REV): a changed display_rev only reports the values that moved
                                  * (audioMasterAutomate), with no UpdateDisplay. MPC answers every UpdateDisplay by re-listing the
@@ -150,6 +157,7 @@ typedef struct {
     float pend0, pend0_from;  /* a host set of parameter 0 not applied yet, and where parameter 0 was before it */
     int has_pend0;            /* (see setParameter) */
     char last_rev[16];       /* HAS_DISPLAY_REV: the "display_rev" last seen */
+    int rev_left, rev_next;  /* REPORTS_PER_BLOCK: params still to check since the last change, and the next one */
     float last_norm[NPARAMS];   /* HAS_DISPLAY_REV: value last reported per param (-1 = never) */
     float open[NPARAMS];     /* popup "open" flags (popup.h): kept here, never sent to the DSP or saved */
     char chunk[8192];
@@ -542,11 +550,25 @@ static void housekeeping(AEffect *e, int32_t n) {
             if (!DISPLAY_REV_NO_UPDATE) w->need_update_display = 1;
             /* report what the engine changed by itself, so the host moves controls and re-evaluates
              * IndexedEnabling (when= panels), not only text */
-            for (int i = 0; i < NPARAMS; i++) {
-                if (PARAMS[i].momentary || popup_is(i) || PARAMS[i].string_display) continue;
-                float v = get_norm(w, i);
-                if (fabsf(v - w->last_norm[i]) > 1e-4f) { w->last_norm[i] = v; TRACE(2, i, v); w->master(&w->fx, audioMasterAutomate, i, 0, 0, v); }
-            }
+            if (REPORTS_PER_BLOCK > 0)
+                w->rev_left = NPARAMS;   /* a full pass from where the last one stopped, spread over the blocks below */
+            else
+                for (int i = 0; i < NPARAMS; i++) {
+                    if (PARAMS[i].momentary || popup_is(i) || PARAMS[i].string_display) continue;
+                    float v = get_norm(w, i);
+                    if (fabsf(v - w->last_norm[i]) > 1e-4f) { w->last_norm[i] = v; TRACE(2, i, v); w->master(&w->fx, audioMasterAutomate, i, 0, 0, v); }
+                }
+        }
+    }
+    for (int sent = 0; HAS_DISPLAY_REV && REPORTS_PER_BLOCK > 0 && w->rev_left > 0 && sent < REPORTS_PER_BLOCK; w->rev_left--) {
+        int i = w->rev_next;
+        w->rev_next = (i + 1) % NPARAMS;
+        if (PARAMS[i].momentary || popup_is(i) || PARAMS[i].string_display) continue;
+        float v = get_norm(w, i);
+        if (fabsf(v - w->last_norm[i]) > 1e-4f) {
+            w->last_norm[i] = v, sent++;
+            TRACE(2, i, v);
+            w->master(&w->fx, audioMasterAutomate, i, 0, 0, v);
         }
     }
     /* parameters the engine changed by itself (engine.h mpc_engine_changed): reported as a CC's are, just below */
