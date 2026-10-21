@@ -48,7 +48,10 @@ Layout file:
                                                         image, drawn into the page background: the whole plugin area, or
                                                         the box; fit=contain|cover|stretch; browser renderer only.
                                                         With when=, its mode image is the box plus bleed= px each
-                                                        side (default 2); bleed=0 tiles neighbouring boxes exactly)
+                                                        side (default 2); bleed=0 tiles neighbouring boxes exactly).
+                                                        over=1 (a .png, x= y= w= h=): not baked, but its own Image over
+                                                        the background and mode images, alpha kept, so what is under
+                                                        it shows through (e.g. a curve over another view's tiles)
     picture x= y= w= h= key=<param> files="a.png,b.png,.." [fit=]
                                                        (one image per option of the parameter, the current one shown:
                                                         a when= art line per option, so mode images do the switching)
@@ -839,7 +842,9 @@ def build(layout_path, params, skin_dir, art_bin, png_from_ppm):
         for w in tab["widgets"]:
             if banks_of(w) and not banks_of(w) <= titles_:
                 raise SystemExit("layout: banks=%s: not qlinks pages of tab %r (%s)" % (w["banks"], tab["name"], ",".join(sorted(titles_))))
-        base = [w for w in tab["widgets"] if not cond(w) and not (banks_of(w) and baked_rect(w))]
+        overs = [w for w in tab["widgets"] if w["kind"] == "art" and w.get("over") in ("1", "yes", "on")]
+        over_ids = {id(w) for w in overs}
+        base = [w for w in tab["widgets"] if not cond(w) and not (banks_of(w) and baked_rect(w)) and id(w) not in over_ids]
         script.append("clear|" + PLATE)
         for w in base:
             script += baked_cmds(w, TITLE_FONT, base_dir)
@@ -850,6 +855,8 @@ def build(layout_path, params, skin_dir, art_bin, png_from_ppm):
         # when= widgets: per mode, the background redrawn with that mode's baked parts, cropped to them
         modes = {}
         for w in tab["widgets"]:
+            if id(w) in over_ids:
+                continue
             if cond(w):
                 modes.setdefault(cond(w), []).append(w)
             elif banks_of(w) and baked_rect(w):   # baked parts on some sub-pages only: their own image, filtered below
@@ -873,6 +880,20 @@ def build(layout_path, params, skin_dir, art_bin, png_from_ppm):
                 kid_banks[id(c)] = banks_of({"banks": hnd[1]})
             else:
                 c["bounds"]["additionalInvalidatingHandles"] = [hnd]
+            kids.append(c)
+        # over=1 art: the PNG as is (alpha kept), each its own Image over the mode images, shown per its when=
+        for w in overs:
+            src = os.path.join(base_dir, w["file"])
+            if not src.lower().endswith(".png") or "w" not in w:
+                raise SystemExit("layout: art file=%s over=1: needs a .png and x= y= w= h=" % w["file"])
+            img = "sh_over_" + slug(os.path.splitext(w["file"])[0]) + ".png"
+            if not os.path.exists(os.path.join(skin_dir, img)):
+                with open(src, "rb") as f_in, open(os.path.join(skin_dir, img), "wb") as f_out:
+                    f_out.write(f_in.read())
+            c = _sub("Image", {"version": 2, "imageType": "Regular", "colour": "0", "image": img},
+                     _bounds(w["x"], w["y"] - Y_OFF, w["w"], w["h"]), "Over")
+            if cond(w):
+                c["bounds"]["additionalInvalidatingHandles"] = [cond(w)]
             kids.append(c)
         # Stepper arrow tap-zones: crop the arrow glyph ALREADY drawn into this background (by
         # widget_stepper/dot_stepper) as the tap-zone's own on/off image. An empty onImage/
