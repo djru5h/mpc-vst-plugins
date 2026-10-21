@@ -158,6 +158,10 @@ typedef struct {
     int has_pend0;            /* (see setParameter) */
     char last_rev[16];       /* HAS_DISPLAY_REV: the "display_rev" last seen */
     int rev_left, rev_next;  /* REPORTS_PER_BLOCK: params still to check since the last change, and the next one */
+#ifdef VIS_TRACE
+    volatile int vt[4];      /* VIS_TRACE counts since the last line: automates sent, getParameter, op 7, op 8 */
+    long vt_last;            /* ms of the last line */
+#endif
     float last_norm[NPARAMS];   /* HAS_DISPLAY_REV: value last reported per param (-1 = never) */
     float open[NPARAMS];     /* popup "open" flags (popup.h): kept here, never sent to the DSP or saved */
     char chunk[8192];
@@ -402,10 +406,37 @@ static void setParameter(AEffect *e, int32_t i, float n) {
     set_param_now(e, i, n);
 }
 
+#ifdef VIS_TRACE
+/* Diagnostic (vst.json "defines": {"VIS_TRACE": 1}): does MPC treat the plugin on screen differently? Counts, per
+ * instance, the automates it sends and the getParameter / getParamDisplay (7) / getParamName (8) calls MPC makes, and
+ * once a second (from MPC's own calls, never the audio thread) appends them to /tmp/vis.log:
+ *   <ms> <instance> auto=<n> get=<n> op7=<n> op8=<n>
+ * An instance whose page isn't showing writes no lines if MPC only asks about what it draws. */
+#include <time.h>
+static void vis_note(wrap_t *w, int k) {
+    w->vt[k]++;
+    if (k == 0) return;
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    long ms = t.tv_sec * 1000L + t.tv_nsec / 1000000L;
+    if (ms - w->vt_last < 1000) return;
+    w->vt_last = ms;
+    FILE *f = fopen("/tmp/vis.log", "a");
+    if (f && ftell(f) < (1L << 20))
+        fprintf(f, "%ld %p auto=%d get=%d op7=%d op8=%d\n", ms, (void *)w, w->vt[0], w->vt[1], w->vt[2], w->vt[3]);
+    if (f) fclose(f);
+    w->vt[0] = w->vt[1] = w->vt[2] = w->vt[3] = 0;
+}
+#define VIS(w, k) vis_note(w, k)
+#else
+#define VIS(w, k) ((void)0)
+#endif
+
 static float getParameter(AEffect *e, int32_t i) {
     if (i == 0) flush_pend0(e);   /* a read applies a held parameter 0: the host reads back what the engine took */
     float v = get_norm(e->object, i);
     TRACE(1, i, v);
+    VIS((wrap_t *)e->object, 1);
     return v;
 }
 
@@ -556,7 +587,7 @@ static void housekeeping(AEffect *e, int32_t n) {
                 for (int i = 0; i < NPARAMS; i++) {
                     if (PARAMS[i].momentary || popup_is(i) || PARAMS[i].string_display) continue;
                     float v = get_norm(w, i);
-                    if (fabsf(v - w->last_norm[i]) > 1e-4f) { w->last_norm[i] = v; TRACE(2, i, v); w->master(&w->fx, audioMasterAutomate, i, 0, 0, v); }
+                    if (fabsf(v - w->last_norm[i]) > 1e-4f) { w->last_norm[i] = v; TRACE(2, i, v); VIS(w, 0); w->master(&w->fx, audioMasterAutomate, i, 0, 0, v); }
                 }
         }
     }
@@ -568,6 +599,7 @@ static void housekeeping(AEffect *e, int32_t n) {
         if (fabsf(v - w->last_norm[i]) > 1e-4f) {
             w->last_norm[i] = v, sent++;
             TRACE(2, i, v);
+            VIS(w, 0);
             w->master(&w->fx, audioMasterAutomate, i, 0, 0, v);
         }
     }
@@ -745,6 +777,7 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
     TRACE(3, op, (float)idx);
     wrap_t *w = e->object;
     (void)o;
+    if (op == effGetParamDisplay || op == effGetParamName) VIS(w, op == effGetParamDisplay ? 2 : 3);
     switch (op) {
     case effOpen: return 1;
     case effClose:
