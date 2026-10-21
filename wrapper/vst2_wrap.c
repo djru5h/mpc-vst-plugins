@@ -166,6 +166,10 @@ typedef struct {
 #ifdef VIS_TRACE
     volatile int vt[4];      /* VIS_TRACE counts since the last line: automates sent, getParameter, op 7, op 8 */
     long vt_last;            /* ms of the last line */
+    long vt_sent[NPARAMS];   /* ms of each param's oldest automate MPC hasn't asked its name for yet (0: none) */
+    long lat_sum[2], lat_max[2];   /* that wait, per second: params before VIS_GRAPH_FROM, and from it on */
+    int lat_n[2];
+    char tune[64];           /* the last /tmp/vis_tune.txt passed to the engine as "vis_tune" */
 #endif
     float last_norm[NPARAMS];   /* HAS_DISPLAY_REV: value last reported per param (-1 = never) */
     float open[NPARAMS];     /* popup "open" flags (popup.h): kept here, never sent to the DSP or saved */
@@ -418,23 +422,56 @@ static void setParameter(AEffect *e, int32_t i, float n) {
  *   <ms> <instance> auto=<n> get=<n> op7=<n> op8=<n>
  * An instance whose page isn't showing writes no lines if MPC only asks about what it draws. */
 #include <time.h>
+#ifndef VIS_GRAPH_FROM
+#define VIS_GRAPH_FROM NPARAMS
+#endif
+static long vis_ms(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec * 1000L + t.tv_nsec / 1000000L;
+}
+/* an automate of param i went out: MPC answers each with a getParamName, so the wait until that one shows how far
+ * behind MPC's screen thread is (lat_m / lat_g in the log, mean/max ms) */
+static void vis_sent(wrap_t *w, int i) {
+    w->vt[0]++;
+    if (!w->vt_sent[i]) w->vt_sent[i] = vis_ms();
+}
+static void vis_named(wrap_t *w, int i) {
+    if (i < 0 || i >= NPARAMS || !w->vt_sent[i]) return;
+    long lat = vis_ms() - w->vt_sent[i];
+    int g = i >= VIS_GRAPH_FROM;
+    w->vt_sent[i] = 0, w->lat_sum[g] += lat, w->lat_n[g]++;
+    if (lat > w->lat_max[g]) w->lat_max[g] = lat;
+}
+static void eng_set(wrap_t *w, const char *k, const char *v);
 static void vis_note(wrap_t *w, int k) {
     w->vt[k]++;
     if (k == 0) return;
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    long ms = t.tv_sec * 1000L + t.tv_nsec / 1000000L;
+    long ms = vis_ms();
     if (ms - w->vt_last < 1000) return;
     w->vt_last = ms;
+    FILE *tf = fopen("/tmp/vis_tune.txt", "r");   /* live tuning: passed on when it changes */
+    if (tf) {
+        char b[64] = "";
+        if (fgets(b, sizeof b, tf) && strcmp(b, w->tune)) snprintf(w->tune, sizeof w->tune, "%s", b), eng_set(w, "vis_tune", b);
+        fclose(tf);
+    }
     FILE *f = fopen("/tmp/vis.log", "a");
     if (f && ftell(f) < (1L << 20))
-        fprintf(f, "%ld %p auto=%d get=%d op7=%d op8=%d\n", ms, (void *)w, w->vt[0], w->vt[1], w->vt[2], w->vt[3]);
+        fprintf(f, "%ld %p auto=%d get=%d op7=%d op8=%d lat_m=%ld/%ld lat_g=%ld/%ld tune=%s\n", ms, (void *)w, w->vt[0], w->vt[1],
+                w->vt[2], w->vt[3], w->lat_n[0] ? w->lat_sum[0] / w->lat_n[0] : -1, w->lat_max[0],
+                w->lat_n[1] ? w->lat_sum[1] / w->lat_n[1] : -1, w->lat_max[1], w->tune[0] ? w->tune : "-\n");
     if (f) fclose(f);
     w->vt[0] = w->vt[1] = w->vt[2] = w->vt[3] = 0;
+    w->lat_sum[0] = w->lat_sum[1] = w->lat_max[0] = w->lat_max[1] = w->lat_n[0] = w->lat_n[1] = 0;
 }
 #define VIS(w, k) vis_note(w, k)
+#define VIS_SENT(w, i) vis_sent(w, i)
+#define VIS_NAMED(w, i) vis_named(w, i)
 #else
 #define VIS(w, k) ((void)0)
+#define VIS_SENT(w, i) ((void)0)
+#define VIS_NAMED(w, i) ((void)0)
 #endif
 
 static float getParameter(AEffect *e, int32_t i) {
@@ -592,7 +629,7 @@ static void housekeeping(AEffect *e, int32_t n) {
                 for (int i = 0; i < NPARAMS; i++) {
                     if (PARAMS[i].momentary || popup_is(i) || PARAMS[i].string_display) continue;
                     float v = get_norm(w, i);
-                    if (fabsf(v - w->last_norm[i]) > 1e-4f) { w->last_norm[i] = v; TRACE(2, i, v); VIS(w, 0); w->master(&w->fx, audioMasterAutomate, i, 0, 0, v); }
+                    if (fabsf(v - w->last_norm[i]) > 1e-4f) { w->last_norm[i] = v; TRACE(2, i, v); VIS_SENT(w, i); w->master(&w->fx, audioMasterAutomate, i, 0, 0, v); }
                 }
         }
     }
@@ -604,7 +641,7 @@ static void housekeeping(AEffect *e, int32_t n) {
         if (fabsf(v - w->last_norm[i]) > 1e-4f) {
             w->last_norm[i] = v, sent++;
             TRACE(2, i, v);
-            VIS(w, 0);
+            VIS_SENT(w, i);
             w->master(&w->fx, audioMasterAutomate, i, 0, 0, v);
         }
     }
@@ -782,6 +819,7 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
     TRACE(3, op, (float)idx);
     wrap_t *w = e->object;
     (void)o;
+    if (op == effGetParamName) VIS_NAMED(w, idx);
     if (op == effGetParamDisplay || op == effGetParamName) VIS(w, op == effGetParamDisplay ? 2 : 3);
     switch (op) {
     case effOpen: return 1;
