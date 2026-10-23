@@ -627,6 +627,13 @@ class Art:
                             '<rect class="button-sheen" x="%d" y="%d" width="%d" height="%d"/>%s</g>' % (
                                 " td3" if self.td3 else "", col, x + 2, y + 2, bw - 4, bh - 4, x + 2, y + 2, bw - 4, bh - 4,
                                 self.text(cx, cy, lab, "button-tx")))
+        elif op == "boxbtn" and n == 8:   # a sized button (shadow_art.c draws Play/Stop as shapes; here every label is text)
+            x, y, bw, bh, col, lab = I(1), I(2), I(3), I(4), hexc(a[5]), a[6]
+            self.ops.append('<g class="button%s" style="--fill:%s">'
+                            '<rect class="button-bg" x="%d" y="%d" width="%d" height="%d"/>'
+                            '<rect class="button-sheen" x="%d" y="%d" width="%d" height="%d"/>%s</g>' % (
+                                " td3" if self.td3 else "", col, x + 2, y + 2, bw - 4, bh - 4, x + 2, y + 2, bw - 4, bh - 4,
+                                self.text(x + bw / 2, y + bh / 2, lab.strip(), "button-tx")))
         elif op == "seg" and n == 8:
             x, y, w, h = I(1), I(2), I(3), I(4)
             self.ops.append('<g class="seg" style="--fill:%s;--ink:%s"><rect class="seg-bg" x="%d" y="%d" width="%d" height="%d"/>'
@@ -695,7 +702,7 @@ class Art:
                               [self.slider_frame(0, 0, w, h, vert, k / (frames - 1), look) for k in range(frames)]))
         elif op == "crop" and n == 6:
             lone = self.kinds[:1] == ["clear"] and len(self.kinds) == 2 and self.kinds[1] in (
-                "pill", "button", "seg", "tile", "knob", "ltog", "lbtn", "lseg", "limg")
+                "pill", "button", "boxbtn", "seg", "tile", "knob", "ltog", "lbtn", "lseg", "limg")
             svg = "".join(self.ops[1:] if lone else self.ops)
             self.jobs.append(("crop", svg, a[1], I(2), I(3), I(4), I(5), lone))
         elif op == "strip" and n == 5:
