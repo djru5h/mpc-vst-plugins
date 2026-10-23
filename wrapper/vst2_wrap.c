@@ -792,7 +792,9 @@ static void set_program(wrap_t *w, int idx) {
     const param_t *pp = &PARAMS[PROG_PARAM];
     snprintf(buf, sizeof buf, "%d", pp->nopts > 1 ? idx : (int)lroundf(pp->min) + idx);
     eng_set(w, pp->key, buf);
-    for (int i = 0; i < NPARAMS; i++) w->changed[i] = !popup_is(i);   /* a preset may change anything */
+    for (int i = 0; i < NPARAMS; i++)   /* a preset may change any control (display-only params past AUTOMATABLE_PARAMS,
+                                         * meters, report themselves: hundreds of reports in one block crackle) */
+        w->changed[i] = !popup_is(i) && i < AUTOMATABLE_PARAMS;
 #endif
     w->need_update_display = 1;
 }
