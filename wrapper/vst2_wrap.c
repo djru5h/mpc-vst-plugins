@@ -173,6 +173,7 @@ typedef struct {
     char tune[64];           /* the last /tmp/vis_tune.txt passed to the engine as "vis_tune" */
 #endif
     float last_norm[NPARAMS];   /* HAS_DISPLAY_REV: value last reported per param (-1 = never) */
+    float pmax[NPARAMS];     /* each param's maximum: PARAMS[i].max, or for a "dynamic_max" one the engine's "<key>_max" */
     float open[NPARAMS];     /* popup "open" flags (popup.h): kept here, never sent to the DSP or saved */
     char chunk[8192];
     pthread_mutex_t lock;    /* one engine call at a time: see eng_set() */
@@ -252,6 +253,13 @@ static float str_to_norm(const param_t *p, const char *s) {
     return p->max > p->min ? clamp01((float)((atof(s) - p->min) / (p->max - p->min))) : 0;
 }
 
+/* PARAMS[i] with this instance's maximum ("dynamic_max": the engine reports it; see VSTPluginMain) */
+static param_t live_param(const wrap_t *w, int i) {
+    param_t p = PARAMS[i];
+    p.max = w->pmax[i];
+    return p;
+}
+
 static float get_norm(wrap_t *w, int i) {
     char buf[64];
     if (i < 0 || i >= NPARAMS) return 0;
@@ -264,7 +272,8 @@ static float get_norm(wrap_t *w, int i) {
         if (eng_get(w, k2, buf, sizeof buf) > 0) return atoi(buf) ? 1.0f : 0.0f;
     }
     if (eng_get(w, PARAMS[i].key, buf, sizeof buf) <= 0) return PARAMS[i].def;
-    return str_to_norm(&PARAMS[i], buf);
+    const param_t p = live_param(w, i);
+    return str_to_norm(&p, buf);
 }
 
 /* Where a param that moves in whole steps (an option list, a whole-number value) lands, in steps from its minimum.
@@ -285,7 +294,7 @@ static void set_param_now(AEffect *e, int32_t i, float n) {
     TRACE(0, i, n);
     char buf[64];
     if (i < 0 || i >= NPARAMS) return;
-    const param_t *p = &PARAMS[i];
+    const param_t lp = live_param(w, i), *p = &lp;
     int nudge = 0;
     if (popup_set(w->open, i, n)) {
         if (w->open[i] > 0.5f) popup_close_others(w->open, w->holdFrames, i);   /* one list at a time */
@@ -735,7 +744,7 @@ static void process(AEffect *e, float **in, float **out, int32_t n) { (void)in; 
  * flood. Returns 1 when the message was used here (it then doesn't go to the engine). */
 static void cc_set(wrap_t *w, int i, float n) {
     if (i < 0 || i >= NPARAMS || popup_is(i)) return;
-    const param_t *p = &PARAMS[i];
+    const param_t lp = live_param(w, i), *p = &lp;
     if (p->nopts > 1) n = roundf(clamp01(n) * (p->nopts - 1)) / (p->nopts - 1);
     else if (p->int_display && p->max > p->min) n = roundf(clamp01(n) * (p->max - p->min)) / (p->max - p->min);
     setParameter(&w->fx, i, n);
@@ -954,7 +963,16 @@ __attribute__((visibility("default"))) AEffect *VSTPluginMain(audioMasterCallbac
     if (!w->dsp) { pthread_mutex_destroy(&w->lock); free(w); return NULL; }
     w->master = master;
     w->pos = DSP_BLOCK;
-    for (int i = 0; i < NPARAMS; i++) w->last_pos[i] = w->last_norm[i] = -1;
+    for (int i = 0; i < NPARAMS; i++) {
+        w->last_pos[i] = w->last_norm[i] = -1;
+        w->pmax[i] = PARAMS[i].max;
+        char k2[96], buf[64];
+        snprintf(k2, sizeof k2, "%s_max", PARAMS[i].key);
+        if (PARAMS[i].dynamic_max && eng_get(w, k2, buf, sizeof buf) > 0) {
+            float m = (float)atof(buf);   /* within the declared range; at the minimum the knob has nothing to step */
+            w->pmax[i] = m < PARAMS[i].min ? PARAMS[i].min : m > PARAMS[i].max ? PARAMS[i].max : m;
+        }
+    }
     w->nrpn = -1;
     AEffect *e = &w->fx;
     e->magic = 0x56737450; /* 'VstP' */
