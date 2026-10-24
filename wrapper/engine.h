@@ -47,3 +47,8 @@ int mpc_engine_changed(void *inst, char *key, int len) __attribute__((weak));
  * defines this instead, and the wrapper then never calls process() (keep it in mpc_engine_t, for older wrappers). A weak
  * symbol like mpc_engine_changed (a C++ engine defines it extern "C"). in_lr never aliases out_lr. */
 void mpc_engine_process_f(void *inst, const float *in_lr, float *out_lr, int frames) __attribute__((weak));
+
+/* Optional, instruments only: render float audio, interleaved stereo, the same frame counts as render(), instead of
+ * render()'s int16 (which clips at 0 dBFS and quantises to 16 bits before MPC's mixer). A weak symbol like the others;
+ * the wrapper then never calls render() (keep it in mpc_engine_t, for older wrappers). */
+void mpc_engine_render_f(void *inst, float *out_lr, int frames) __attribute__((weak));
